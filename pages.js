@@ -46,6 +46,12 @@ import { Badge, SevTag, Confidence, Card, Legend, Empty, cls, StatChip } from ".
 import { Sparkline, LineChart, BarChart, Donut, MultiDonut, HBar, Ring } from "./charts.js";
 import { IndiaMap } from "./IndiaMap.js";
 import { ACTIVE_EVENTS, REPORTS, ALERTS, LOCATIONS, VERIFICATION_QUEUE, EVENT_TYPES } from "./data.js";
+import {
+  analyzeReport,
+  deduplicateReport,
+  classifyWeatherText,
+  detectCredibilityAndMisinformation
+} from "./weatherAiEngine.js";
 const brand = (v2) => v2 >= 85 ? "#16a34a" : v2 >= 60 ? "#d97706" : "#dc2626";
 const evColor = (n) => {
   for (const k in EVENT_TYPES) if (EVENT_TYPES[k].name === n) return EVENT_TYPES[k].color;
@@ -3584,6 +3590,54 @@ function Verification() {
                 sel.lat && sel.lng ? /* @__PURE__ */ jsxDEV("span", { children: `🌐 ${parseFloat(sel.lat).toFixed(3)}, ${parseFloat(sel.lng).toFixed(3)}` }, void 0, false, { fileName: "<stdin>", lineNumber: 633, columnNumber: 45 }, this) : null,
                 /* @__PURE__ */ jsxDEV("span", { children: `⏱️ ${formatTimeAgo(sel.created_at)}` }, void 0, false, { fileName: "<stdin>", lineNumber: 633, columnNumber: 75 }, this)
               ] }, void 0, true, { fileName: "<stdin>", lineNumber: 633, columnNumber: 11 }, this),
+              /* @__PURE__ */ (() => {
+                const aiInfo = analyzeReport(sel.description, { city: sel.city, hasMedia: !!sel.media_url, hasGps: !!(sel.lat && sel.lng) });
+                return /* @__PURE__ */ jsxDEV("div", {
+                  style: {
+                    background: "rgba(56, 189, 248, 0.08)",
+                    border: "1px solid rgba(56, 189, 248, 0.3)",
+                    borderRadius: 8,
+                    padding: "10px 12px",
+                    marginTop: 6,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 5
+                  },
+                  children: [
+                    /* @__PURE__ */ jsxDEV("div", {
+                      style: { display: "flex", justifyContent: "space-between", alignItems: "center" },
+                      children: [
+                        /* @__PURE__ */ jsxDEV("span", {
+                          style: { fontWeight: 700, fontSize: 12, color: "#0284c7" },
+                          children: `🤖 AI Category: ${aiInfo.category} (${aiInfo.severity_level})`
+                        }, void 0, false, { fileName: "<stdin>", lineNumber: 1, columnNumber: 1 }, this),
+                        /* @__PURE__ */ jsxDEV(Badge, {
+                          s: aiInfo.verification_status === "VERIFIED" ? "green" : aiInfo.verification_status === "SUSPICIOUS" ? "yellow" : "red",
+                          dot: true,
+                          children: `${Math.round(aiInfo.credibility_score * 100)}% Credible · ${aiInfo.verification_status}`
+                        }, void 0, false, { fileName: "<stdin>", lineNumber: 1, columnNumber: 1 }, this)
+                      ]
+                    }, void 0, true, { fileName: "<stdin>", lineNumber: 1, columnNumber: 1 }, this),
+                    /* @__PURE__ */ jsxDEV("div", {
+                      style: { color: "var(--ink-2)", fontSize: 11.5, lineHeight: 1.4 },
+                      children: [
+                        /* @__PURE__ */ jsxDEV("strong", { children: "AI Reasoning: " }, void 0, false, { fileName: "<stdin>", lineNumber: 1, columnNumber: 1 }, this),
+                        aiInfo.reasoning
+                      ]
+                    }, void 0, true, { fileName: "<stdin>", lineNumber: 1, columnNumber: 1 }, this),
+                    /* @__PURE__ */ jsxDEV("div", {
+                      style: { fontSize: 11, color: "var(--ink-3)", display: "flex", gap: 14, flexWrap: "wrap", borderTop: "1px dashed rgba(56, 189, 248, 0.2)", paddingTop: 4 },
+                      children: [
+                        /* @__PURE__ */ jsxDEV("span", { children: `📍 Extracted Entity: ${aiInfo.detected_location || sel.city}` }, void 0, false, { fileName: "<stdin>", lineNumber: 1, columnNumber: 1 }, this),
+                        /* @__PURE__ */ jsxDEV("span", {
+                          style: { color: aiInfo.is_duplicate ? "var(--warn)" : "var(--ok)" },
+                          children: aiInfo.is_duplicate ? `⚡ Duplicate Retweet / Cluster: ${(aiInfo.similarity * 100).toFixed(0)}% match with #${aiInfo.duplicate_of}` : "✓ Unique Incident Report"
+                        }, void 0, false, { fileName: "<stdin>", lineNumber: 1, columnNumber: 1 }, this)
+                      ]
+                    }, void 0, true, { fileName: "<stdin>", lineNumber: 1, columnNumber: 1 }, this)
+                  ]
+                }, void 0, true, { fileName: "<stdin>", lineNumber: 1, columnNumber: 1 }, this);
+              })(),
               sel.media_url ? /* @__PURE__ */ jsxDEV("div", {
                 style: {
                   marginTop: 8,
@@ -4477,20 +4531,41 @@ function CitizenReport() {
       aiStatus = "Unverified";
     }
 
+    // --- METEOROLOGICAL AI/ML PIPELINE (Categorization, Credibility, Deduplication) ---
+    const aiAnalysis = analyzeReport({
+      text: desc || `${event} in ${city}, ${state}`,
+      city: city,
+      hasMedia: !!mediaUrl,
+      hasGps: !!gps
+    });
+
+    if (aiAnalysis.is_duplicate) {
+      toast({
+        type: "info",
+        title: "⚡ Incident Clustered",
+        desc: `Matching ongoing report (${(aiAnalysis.similarity * 100).toFixed(0)}% semantic vector similarity). Merging with active incident cluster.`
+      });
+    }
+
+    // Blend open-meteo physical check with NLP credibility score
+    const combinedTrust = Math.round((aiScore * 0.55) + ((aiAnalysis.credibility_score * 100) * 0.45));
+    const resolvedStatus = aiAnalysis.verification_status === "REJECTED" ? "Suspicious" : (isTrue ? "Verified" : aiAnalysis.verification_status);
+    const resolvedEvent = event === "Other" && aiAnalysis.category !== "Other" ? aiAnalysis.category : event;
+
     // --- SUPABASE DATABASE MEIN SAVE KARNA ---
     const { data, error } = await supabase
       .from('weather_reports')
       .insert([
         { 
-          event_type: event, 
+          event_type: resolvedEvent, 
           state: state, 
           city: city, 
           area: area, 
           description: desc,
           latitude: lat,
           longitude: lng,
-          status: aiStatus,
-          trust_score: aiScore,
+          status: resolvedStatus,
+          trust_score: combinedTrust,
           media_url: mediaUrl
         }
       ]);
@@ -4516,7 +4591,7 @@ function CitizenReport() {
   const syncSocialMedia = async () => {
     toast({ type: "info", title: "Scanning Radar", desc: "Scraping X (Twitter) & News APIs for local alerts..." });
 
-    // Simulated Live Tweets / News Data
+    // Simulated Live Tweets / News Data (including a viral retweet to test AI deduplication)
     const mockAlerts = [
       {
         event_type: "Flooding",
@@ -4527,6 +4602,17 @@ function CitizenReport() {
         latitude: 19.1136,
         longitude: 72.8697,
         trust_score: 92,
+        status: "Verified"
+      },
+      {
+        event_type: "Flooding",
+        state: "Maharashtra",
+        city: "Mumbai",
+        area: "Andheri",
+        description: "RT @bot_echo: Terrible waterlogging at Andheri subway. #MumbaiRains (Retweet)",
+        latitude: 19.1136,
+        longitude: 72.8697,
+        trust_score: 85,
         status: "Verified"
       },
       {
@@ -4543,15 +4629,27 @@ function CitizenReport() {
     ];
 
     try {
-      // Loop lagakar data ko database mein bhejna
+      let duplicatesDropped = 0;
+      let insertedCount = 0;
+
       for (const alert of mockAlerts) {
+        const aiCheck = analyzeReport({ text: alert.description, city: alert.city });
+        if (aiCheck.is_duplicate) {
+          duplicatesDropped++;
+          console.log(`[AI Deduplication] Dropped duplicate/retweet: "${alert.description}" (Similarity: ${(aiCheck.similarity * 100).toFixed(0)}%)`);
+          continue; // Merge/drop viral retweet so disaster counts are not skewed
+        }
+        insertedCount++;
         await supabase.from('weather_reports').insert([alert]);
       }
       
       setTimeout(() => {
-        toast({ type: "ok", title: "Sync Complete", desc: `Intercepted and verified ${mockAlerts.length} active alerts.` });
-        // Page refresh karne ke liye taaki naya data dikhe
-        setTimeout(() => window.location.reload(), 2000);
+        toast({
+          type: "ok",
+          title: "Radar Ingested & Cleaned",
+          desc: `Ingested ${insertedCount} verified alert(s). AI Vector Deduplication dropped ${duplicatesDropped} viral retweet(s).`
+        });
+        setTimeout(() => window.location.reload(), 2200);
       }, 1500);
 
     } catch (err) {

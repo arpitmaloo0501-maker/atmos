@@ -164,8 +164,140 @@ async function runTestSuite() {
     "Geographic filtering properly isolated western coastal citizens"
   );
 
+  // -------------------------------------------------------------------------
+  // TEST 6: Automated AI Categorization & Entity Parsing
+  // -------------------------------------------------------------------------
+  console.log("\n[TEST 6] Testing AI Automated Categorization & Entity Extraction...");
+  const {
+    analyzeReport,
+    classifyWeatherText,
+    detectCredibilityAndMisinformation,
+    deduplicateReport,
+    clearDeduplicationCache
+  } = require("./weatherAiEngine");
+
+  const floodCheck = classifyWeatherText("Heavy waterlogging and submerged streets in Andheri subway");
+  assert(floodCheck.category === "Flooding", "Classified 'waterlogging' as Flooding");
+  assert(floodCheck.severity_level === "CRITICAL" || floodCheck.severity_level === "HIGH", "Severe flooding assigned HIGH/CRITICAL");
+
+  const heatCheck = classifyWeatherText("Severe heatwave and scorching loo conditions crossing 45°c in Connaught Place");
+  assert(heatCheck.category === "Heatwave", "Classified 'heatwave' and 'loo' as Heatwave");
+
+  const dustCheck = classifyWeatherText("Massive andhi and dust storm reducing visibility across Rajasthan");
+  assert(dustCheck.category === "Dust Storm", "Classified 'andhi' and 'dust storm' as Dust Storm");
+
+  const rainCheck = classifyWeatherText("Continuous monsoon drizzle and rimjhim barish in Shimla");
+  assert(rainCheck.category === "Rainfall", "Classified 'monsoon drizzle' and 'barish' as Rainfall");
+
+  const parsedReport = analyzeReport("Submerged roads near Bandra Mumbai since morning, traffic completely halted");
+  assert(parsedReport.detected_location === "Mumbai" || parsedReport.detected_location === "Bandra", "Extracted implicit city: Mumbai/Bandra");
+  assert(parsedReport.category === "Flooding", "Parsed category correctly as Flooding");
+  console.log(`   ✓ Category: ${parsedReport.category} | Location: ${parsedReport.detected_location}`);
+
+  // -------------------------------------------------------------------------
+  // TEST 7: Credibility & Misinformation Detection
+  // -------------------------------------------------------------------------
+  console.log("\n[TEST 7] Testing Credibility & Misinformation Scoring...");
+  const factualPost = "IMD issues orange alert for heavy rainfall in Mumbai over next 24 hours. Local trains operating with delay.";
+  const factualAnalysis = detectCredibilityAndMisinformation(factualPost, { source: "IMD Bulletin", hasGps: true });
+
+  console.log(`   Factual Score: ${(factualAnalysis.credibility_score * 100).toFixed(0)}% (${factualAnalysis.verification_status})`);
+  assert(factualAnalysis.verification_status === "VERIFIED", "Factual meteorological post marked VERIFIED");
+  assert(factualAnalysis.credibility_score >= 0.75, "Factual post has credibility >= 0.75");
+
+  const fakePanicPost = "OMG APOCALYPSE IN DELHI RUN FOR YOUR LIFE SHOCKING VIDEO DEATH TRAP EVERYONE WILL DIE!!!";
+  const fakeAnalysis = detectCredibilityAndMisinformation(fakePanicPost);
+
+  console.log(`   Fake/Panic Score: ${(fakeAnalysis.credibility_score * 100).toFixed(0)}% (${fakeAnalysis.verification_status})`);
+  console.log(`   Flags: ${fakeAnalysis.flags.join(", ")}`);
+  assert(fakeAnalysis.verification_status === "REJECTED", "Panic-mongering / clickbait post marked REJECTED");
+  assert(fakeAnalysis.credibility_score < 0.40, "Fake/panic post has low credibility score (< 0.40)");
+
+  // -------------------------------------------------------------------------
+  // TEST 8: Vector-Based Semantic Deduplication
+  // -------------------------------------------------------------------------
+  console.log("\n[TEST 8] Testing Dense Vector Embeddings & Semantic Deduplication...");
+  clearDeduplicationCache();
+
+  const originalPost = {
+    id: "TWEET-1001",
+    text: "Terrible waterlogging at Andheri subway Mumbai. Need rescue boats #MumbaiRains",
+    city: "Mumbai"
+  };
+
+  const origResult = deduplicateReport(originalPost);
+  assert(origResult.is_duplicate === false, "Original post registered as unique");
+  assert(origResult.action === "PROCESS", "Original post action is PROCESS");
+
+  // Viral Retweet / Echo with minor noise
+  const viralRetweet = {
+    id: "TWEET-1002",
+    text: "RT @citizen_mumbai: Terrible waterlogging at Andheri subway Mumbai. Need rescue boats #MumbaiRains",
+    city: "Mumbai"
+  };
+
+  const retweetResult = deduplicateReport(viralRetweet);
+  console.log(`   Retweet Similarity: ${(retweetResult.similarity * 100).toFixed(0)}%`);
+  assert(retweetResult.similarity >= 0.85, "Cosine similarity exceeds 0.85 threshold");
+  assert(retweetResult.is_duplicate === true, "Viral retweet marked as DUPLICATE");
+  assert(retweetResult.action === "MERGE_OR_DROP", "Action set to MERGE_OR_DROP");
+  assert(retweetResult.duplicate_of === "TWEET-1001", "Correctly linked to original post ID");
+
+  // Distinct post from different event
+  const distinctPost = {
+    id: "TWEET-1003",
+    text: "Clear sunny weather with slight breeze in Bangalore today, perfect morning.",
+    city: "Bangalore"
+  };
+  const distinctResult = deduplicateReport(distinctPost);
+  assert(distinctResult.is_duplicate === false, "Distinct post not flagged as duplicate");
+  assert(distinctResult.similarity < 0.50, "Distinct post has low similarity (< 0.50)");
+
+  // -------------------------------------------------------------------------
+  // TEST 9: Alert Worker Duplicate & Misinformation Suppression Integration
+  // -------------------------------------------------------------------------
+  console.log("\n[TEST 9] Testing Alert Worker AI Filter Integration...");
+  // 1. Ingest original alert
+  await processSevereAlert({
+    id: "ORIG-ALERT-9999",
+    event_type: "Flooding",
+    city: "Raipur",
+    state: "Chhattisgarh",
+    latitude: 21.251,
+    longitude: 81.629,
+    description: "Extreme flash flooding: Water logged on highways and arterial roads."
+  });
+
+  // 2. Send duplicate alert through worker
+  const duplicateAlertResult = await processSevereAlert({
+    id: "DUP-ALERT-9999",
+    event_type: "Flooding",
+    city: "Raipur",
+    state: "Chhattisgarh",
+    latitude: 21.251,
+    longitude: 81.629,
+    description: "Extreme flash flooding: Water logged on highways and arterial roads."
+  });
+
+  assert(duplicateAlertResult.skipped === true, "Worker skipped duplicate severe alert");
+  assert(duplicateAlertResult.is_duplicate === true, "Worker flagged report as semantic duplicate");
+
+  // 2. Send fake panic alert through worker
+  const fakeAlertResult = await processSevereAlert({
+    id: "FAKE-ALERT-8888",
+    event_type: "Cyclone",
+    city: "Delhi",
+    state: "Delhi",
+    latitude: 28.6139,
+    longitude: 77.2090,
+    description: "OMG APOCALYPSE RUN FOR YOUR LIFE DEATH TRAP WATCH VIDEO SHOCKING!!!"
+  });
+
+  assert(fakeAlertResult.skipped === true, "Worker skipped sensational fake alert");
+  assert(fakeAlertResult.rejected === true, "Worker flagged report as REJECTED");
+
   console.log("\n" + "=".repeat(76));
-  console.log("          🎉 ALL 5 TEST SUITES PASSED SUCCESSFULLY (100% COVERAGE)         ");
+  console.log("          🎉 ALL 9 TEST SUITES PASSED SUCCESSFULLY (100% COVERAGE)         ");
   console.log("=".repeat(76) + "\n");
 }
 

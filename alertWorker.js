@@ -14,6 +14,12 @@ const { createClient } = require("@supabase/supabase-js");
 const { haversineDistance, findUsersWithinRadius } = require("./geospatial");
 const { MOCK_USERS } = require("./mockUsers");
 const { sendEmergencyAlertSms, isSimulationMode } = require("./twilioService");
+const {
+  analyzeReport,
+  deduplicateReport,
+  classifyWeatherText,
+  detectCredibilityAndMisinformation
+} = require("./weatherAiEngine");
 
 // Supabase configuration
 const SUPABASE_URL = process.env.SUPABASE_URL || "https://rblcrsboalpuhofaeqol.supabase.co";
@@ -116,6 +122,46 @@ async function processSevereAlert(alert) {
   console.log(`🌐 Coordinates: [Lat: ${lat.toFixed(4)}, Lon: ${lon.toFixed(4)}]`);
   console.log(`📝 Description: "${alert.description || "Field alert"}"`);
   console.log("-".repeat(76));
+
+  // --- Step 0: Meteorological AI/ML Analysis (Categorization, Credibility, Deduplication) ---
+  const alertDesc = alert.description || `${alert.event_type || 'Weather event'} in ${alertCity}, ${alertState}`;
+  const aiAnalysis = analyzeReport({
+    id: alertId,
+    text: alertDesc,
+    city: alertCity
+  });
+
+  console.log(`🤖 [AI Intelligence] Category: ${aiAnalysis.category} | Credibility: ${(aiAnalysis.credibility_score * 100).toFixed(0)}% (${aiAnalysis.verification_status}) | Severity: ${aiAnalysis.severity_level}`);
+  if (aiAnalysis.reasoning) {
+    console.log(`💡 [AI Reasoning] ${aiAnalysis.reasoning}`);
+  }
+
+  // --- Step 0A: Vector-Based Semantic Deduplication Check ---
+  if (aiAnalysis.is_duplicate) {
+    console.log(`⚡ [AI Deduplication] Dropped duplicate report #${alertId} (Similarity: ${(aiAnalysis.similarity * 100).toFixed(0)}% with #${aiAnalysis.duplicate_of}). Action: ${aiAnalysis.dedup_action}. Emergency SMS suppressed.`);
+    console.log("=".repeat(76) + "\n");
+    return {
+      alertId,
+      skipped: true,
+      is_duplicate: true,
+      duplicate_of: aiAnalysis.duplicate_of,
+      similarity: aiAnalysis.similarity,
+      reason: "Semantic duplicate suppressed"
+    };
+  }
+
+  // --- Step 0B: Credibility & Misinformation Detection Filter ---
+  if (aiAnalysis.verification_status === "REJECTED" || aiAnalysis.credibility_score < 0.40) {
+    console.warn(`🛡️ [AI Credibility Filter] Alert #${alertId} flagged as ${aiAnalysis.verification_status} (Credibility: ${(aiAnalysis.credibility_score * 100).toFixed(0)}%). Emergency SMS cancelled.`);
+    console.log("=".repeat(76) + "\n");
+    return {
+      alertId,
+      skipped: true,
+      rejected: true,
+      credibility_score: aiAnalysis.credibility_score,
+      reason: aiAnalysis.reasoning
+    };
+  }
 
   // --- Step 1: Geospatial Proximity Calculation using Haversine ---
   console.log(`📐 Calculating Haversine distances against citizen database (Radius <= ${ALERT_RADIUS_KM} km)...`);
