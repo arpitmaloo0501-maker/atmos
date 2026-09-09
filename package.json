@@ -1,0 +1,17 @@
+{
+  "name": "mausamnet-severe-alert-worker",
+  "version": "1.0.0",
+  "description": "Node.js background worker for severe weather alerts with Haversine 50km geospatial matching and Twilio emergency SMS broadcasting.",
+  "main": "alertWorker.js",
+  "scripts": {
+    "start": "node server.js",
+    "start:worker": "node alertWorker.js",
+    "test:worker": "node testWorker.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.109.0",
+    "dotenv": "^17.4.2",
+    "twilio": "^6.1.0",
+    "ws": "^8.21.3"
+  }
+}
