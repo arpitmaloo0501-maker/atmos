@@ -4,6 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Citizen Weather Reporter | Atmos</title>
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#0284c7">
+    <meta name="apple-mobile-web-app-capable" content="yes">
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <style>
         body { 
@@ -141,13 +144,12 @@
 </div>
 
 <script>
-    // Supabase configuration for real-time central storage
-    const SUPABASE_URL = 'https://rblcrsboalpuhofaeqol.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJibGNyc2JvYWxwdWhvZmFlcW9sIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg2ODM3NTQsImV4cCI6MjEwNDI1OTc1NH0.dKh0sPbzAlKpPxP0KSVb3YSSVYhbEdPTA5gufHxmHqM';
-    const supabaseClient = window.supabase ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY) : null;
-
     let userLat = null;
     let userLon = null;
+
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/sw.js');
+    }
 
     function acquireGPS() {
         if (navigator.geolocation) {
@@ -157,32 +159,53 @@
                     userLon = pos.coords.longitude;
                     document.getElementById('gpsStatus').innerText = `✓ Verified GPS: ${userLat.toFixed(4)}, ${userLon.toFixed(4)}`;
                 },
-                (err) => { alert("Location access denied. Named-Entity geocoding will be applied from report text."); },
-                { enableHighAccuracy: true, timeout: 10000 }
+                () => { alert("Location access denied. Named-Entity geocoding will be applied from text."); }
             );
         }
     }
 
+    async function syncOfflineQueue() {
+        const queue = JSON.parse(localStorage.getItem('atmos_offline_reports') || '[]');
+        if (!queue.length) return;
+        
+        console.log(`[PWA] Online again. Syncing ${queue.length} cached offline reports...`);
+        const remaining = [];
+        
+        for (const item of queue) {
+            try {
+                await fetch('http://localhost:8000/verify', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(item)
+                });
+            } catch (e) {
+                remaining.push(item);
+            }
+        }
+        localStorage.setItem('atmos_offline_reports', JSON.stringify(remaining));
+        if (remaining.length === 0) alert("All offline reports synchronized successfully!");
+    }
+
+    window.addEventListener('online', syncOfflineQueue);
+
     document.getElementById('citizenForm').addEventListener('submit', async (e) => {
         e.preventDefault();
-        const submitBtn = document.getElementById('submitBtn');
-        const resultBox = document.getElementById('resultBox');
-        const textVal = document.getElementById('text').value.trim();
-        const categoryVal = document.getElementById('category').value;
-        const mediaVal = document.getElementById('mediaUrl').value || null;
-
-        submitBtn.disabled = true;
-        submitBtn.innerText = "⏳ Verifying with AI & Sensors...";
-        resultBox.style.display = "none";
-
         const payload = {
             id: `citizen_${Date.now()}`,
-            text: textVal,
-            media_url: mediaVal,
-            category: categoryVal,
+            text: document.getElementById('text').value,
+            media_url: document.getElementById('mediaUrl').value || null,
             lat: userLat,
             lon: userLon
         };
+
+        if (!navigator.onLine) {
+            const queue = JSON.parse(localStorage.getItem('atmos_offline_reports') || '[]');
+            queue.push(payload);
+            localStorage.setItem('atmos_offline_reports', JSON.stringify(queue));
+            alert("⚠️ Network offline. Your report is securely queued and will automatically sync when connection returns.");
+            document.getElementById('citizenForm').reset();
+            return;
+        }
 
         try {
             const resp = await fetch('http://localhost:8000/verify', {
@@ -191,75 +214,13 @@
                 body: JSON.stringify(payload)
             });
             const result = await resp.json();
-
-            // Check if rejected
-            if (result.status && result.status.startsWith("REJECTED")) {
-                resultBox.className = "result-box rejected";
-                resultBox.innerHTML = `<strong>❌ Report Dropped:</strong> ${result.reason || "Duplicate submission detected."}`;
-                submitBtn.disabled = false;
-                submitBtn.innerText = "Submit to Central Pipeline";
-                return;
-            }
-
-            // Central Database Logging
-            if (supabaseClient) {
-                try {
-                    const primaryPayload = {
-                        source_type: "citizen_app",
-                        original_text: textVal,
-                        media_url: mediaVal,
-                        category: result.category || categoryVal,
-                        city: result.city || "Citizen Telemetry",
-                        state: result.state || "India",
-                        latitude: result.latitude || userLat || 21.2514,
-                        longitude: result.longitude || userLon || 81.6296,
-                        verification_status: result.verification_status,
-                        credibility_score: result.credibility_score,
-                        event_type: result.category || categoryVal,
-                        description: textVal,
-                        status: result.verification_status,
-                        trust_score: Math.round(result.credibility_score * 100),
-                        created_at: new Date().toISOString()
-                    };
-
-                    let { error } = await supabaseClient.from('weather_reports').insert([primaryPayload]);
-                    if (error && (error.code === 'PGRST204' || error.message?.includes('column'))) {
-                        await supabaseClient.from('weather_reports').insert([{
-                            city: result.city || "Citizen Telemetry",
-                            state: result.state || "India",
-                            event_type: result.category || categoryVal,
-                            description: textVal,
-                            latitude: result.latitude || userLat || 21.2514,
-                            longitude: result.longitude || userLon || 81.6296,
-                            status: result.verification_status,
-                            trust_score: Math.round(result.credibility_score * 100),
-                            media_url: mediaVal || "",
-                            created_at: new Date().toISOString()
-                        }]);
-                    }
-                } catch (dbErr) {
-                    console.warn("DB insert notice:", dbErr);
-                }
-            }
-
-            const isVerified = result.verification_status === "VERIFIED";
-            resultBox.className = isVerified ? "result-box verified" : "result-box suspicious";
-            resultBox.innerHTML = `
-                <strong>${isVerified ? "✓ Report Verified" : "⚠️ Suspicious / Unverified"}</strong><br/>
-                Category: <strong>${result.category}</strong> | Location: <strong>${result.city || 'NER Resolved'}</strong><br/>
-                Credibility Score: <strong>${Math.round(result.credibility_score * 100)}%</strong>
-            `;
-
-            alert(`Report Status: ${result.verification_status}\nCategory: ${result.category}\nCity: ${result.city}\nCredibility: ${result.credibility_score}`);
+            alert(`Report Accepted!\nStatus: ${result.verification_status}\nSeverity: ${result.category}`);
             document.getElementById('citizenForm').reset();
-            document.getElementById('gpsStatus').innerText = "No GPS tagged (City NER will be used)";
-            userLat = null;
-            userLon = null;
         } catch (err) {
-            alert("Ensure ai_engine.py is running on port 8000.");
-        } finally {
-            submitBtn.disabled = false;
-            submitBtn.innerText = "Submit to Central Pipeline";
+            alert("Server not responding. Saving report to local offline storage.");
+            const queue = JSON.parse(localStorage.getItem('atmos_offline_reports') || '[]');
+            queue.push(payload);
+            localStorage.setItem('atmos_offline_reports', JSON.stringify(queue));
         }
     });
 </script>

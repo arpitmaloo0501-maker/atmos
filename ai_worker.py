@@ -1,249 +1,177 @@
-"""
-ai_worker.py (Redis Streams Big Data Consumer Worker)
-
-Continuous stream consumer worker for MausamNet / Atmos.
-Pulls unverified weather reports asynchronously from the Redis Stream
-('weather_stream') using XREAD, executes NLP categorization & credibility scoring,
-resolves Indian city geolocations, and persists verified data directly to Supabase.
-"""
-
 import os
 import json
-import re
-import sys
 import time
-from typing import Optional, Dict, Any
-
-# Ensure unbuffered UTF-8 output on Windows consoles
-if hasattr(sys.stdout, 'reconfigure'):
-    try:
-        sys.stdout.reconfigure(encoding='utf-8')
-        sys.stderr.reconfigure(encoding='utf-8')
-    except Exception:
-        pass
-
-# Force unbuffered prints
-import functools
-print = functools.partial(print, flush=True)
-
+import sys
+import redis
+import requests
 from dotenv import load_dotenv
+from supabase import create_client, Client
+from twilio.rest import Client as TwilioClient
+
 load_dotenv()
 
-import redis
-from supabase import create_client, Client
+# Supabase & Redis Init
+supabase: Client = create_client(
+    os.getenv("SUPABASE_URL"),
+    os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY")
+)
+r = redis.Redis(host=os.getenv("REDIS_HOST", "localhost"), port=int(os.getenv("REDIS_PORT", 6379)), decode_responses=True)
+STREAM_NAME = os.getenv("REDIS_STREAM_NAME") or os.getenv("STREAM_NAME", "weather_stream")
 
-# Supabase configuration with project defaults (Admin Service Role Key)
-SUPABASE_URL = os.getenv("SUPABASE_URL", "https://rblcrsboalpuhofaeqol.supabase.co")
-SUPABASE_SERVICE_ROLE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJibGNyc2JvYWxwdWhvZmFlcW9sIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4ODY4Mzc1NCwiZXhwIjoyMTA0MjU5NzU0fQ.iQno5XcIMnwCCpU6kOGt6zM3cN4PdalU_Y5fhKifSxM"
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or SUPABASE_SERVICE_ROLE_KEY
+# Alert Endpoints
+WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
+TWILIO_SID = os.getenv("TWILIO_ACCOUNT_SID")
+TWILIO_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+TWILIO_FROM = os.getenv("TWILIO_PHONE_NUMBER")
+AUTHORITY_PHONE = os.getenv("AUTHORITY_PHONE_NUMBER")
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+twilio_client = None
+if TWILIO_SID and TWILIO_TOKEN and not TWILIO_SID.startswith("your_"):
+    try:
+        twilio_client = TwilioClient(TWILIO_SID, TWILIO_TOKEN)
+        print("[Twilio] Initialized SMS Alerting client successfully.")
+    except Exception as e:
+        print(f"[Twilio Init Warning] {e}")
 
-# Dynamically detect table schema columns to prevent PGRST204 schema mismatch errors
+BATCH_SIZE = 50
+FLUSH_INTERVAL_SECONDS = 5.0
+
+# Dynamically discover active Supabase table columns for zero-configuration schema resilience
 TABLE_COLUMNS = set()
 try:
     _schema_check = supabase.table("weather_reports").select("*").limit(1).execute()
     if _schema_check.data and len(_schema_check.data) > 0:
         TABLE_COLUMNS = set(_schema_check.data[0].keys())
-        print(f"[Supabase] Connected successfully. Active columns: {sorted(list(TABLE_COLUMNS))}")
+        print(f"[Supabase] Connected to table 'weather_reports'. Columns: {sorted(list(TABLE_COLUMNS))}")
     else:
-        print("[Supabase] Connected successfully to 'weather_reports'.")
+        print("[Supabase] Connected to table 'weather_reports'.")
 except Exception as _e:
-    print(f"[Supabase] Notice on schema check: {_e}")
+    print(f"[Supabase Schema Check] {_e}")
 
-# Redis client configuration
-REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
-REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
-STREAM_NAME = "weather_stream"
+def format_row_for_supabase(row: dict) -> dict:
+    """Adapts row fields to the database columns (supports both legacy and new schemas)."""
+    if not TABLE_COLUMNS:
+        return row
 
-r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
-
-# Optional SentenceTransformer NLP model
-embedder = None
-try:
-    print("[AI Worker] Loading SentenceTransformer ('all-MiniLM-L6-v2')...")
-    from sentence_transformers import SentenceTransformer
-    embedder = SentenceTransformer("all-MiniLM-L6-v2")
-    print("[AI Worker] SentenceTransformer loaded successfully.")
-except Exception as e:
-    print(f"[AI Worker] Notice: SentenceTransformer offline ({e}). Using rule-based NER & NLP parser.")
-    embedder = None
-
-# Comprehensive Indian City Coordinates for NER Geocoding
-INDIAN_CITIES = {
-    "mumbai": (19.0760, 72.8777, "Maharashtra"),
-    "delhi": (28.7041, 77.1025, "Delhi"),
-    "bengaluru": (12.9716, 77.5946, "Karnataka"),
-    "bangalore": (12.9716, 77.5946, "Karnataka"),
-    "hyderabad": (17.3850, 78.4867, "Telangana"),
-    "chennai": (13.0827, 80.2707, "Tamil Nadu"),
-    "kolkata": (22.5726, 88.3639, "West Bengal"),
-    "pune": (18.5204, 73.8567, "Maharashtra"),
-    "ahmedabad": (23.0225, 72.5714, "Gujarat"),
-    "jaipur": (26.9124, 75.7873, "Rajasthan"),
-    "lucknow": (26.8467, 80.9462, "Uttar Pradesh"),
-    "patna": (25.6093, 85.1376, "Bihar"),
-    "bhopal": (23.2599, 77.4126, "Madhya Pradesh"),
-    "raipur": (21.2514, 81.6296, "Chhattisgarh"),
-    "bhubaneswar": (20.2961, 85.8245, "Odisha"),
-    "guwahati": (26.1445, 91.7362, "Assam"),
-    "chandigarh": (30.7333, 76.7794, "Punjab"),
-    "shimla": (31.1048, 77.1734, "Himachal Pradesh"),
-    "srinagar": (34.0837, 74.7973, "Jammu and Kashmir")
-}
-
-def resolve_location(text: str, lat: Optional[float], lon: Optional[float]):
-    """Resolves coordinates and city/state from text if coordinates missing."""
-    if lat is not None and lon is not None:
-        return lat, lon, "Geo-Tagged", "India"
-
-    lower = text.lower()
-    for city_name, (c_lat, c_lon, c_state) in INDIAN_CITIES.items():
-        if re.search(r'\b' + re.escape(city_name) + r'\b', lower):
-            return c_lat, c_lon, city_name.capitalize(), c_state
-
-    # Default centroid
-    return 20.5937, 78.9629, "National", "India"
-
-def process_single_report(report: Dict[str, Any]):
-    text = report.get("text", "")
-    text_lower = text.lower()
-    report_id = report.get("id", f"msg_{int(time.time()*1000)}")
-
-    # 1. AI Categorization
-    category = "Other"
-    if any(k in text_lower for k in ["flood", "submerged", "waterlog", "inundated", "deluge"]):
-        category = "Flooding"
-    elif any(k in text_lower for k in ["rain", "monsoon", "downpour", "drizzle", "shower"]):
-        category = "Rainfall"
-    elif any(k in text_lower for k in ["thunder", "lightning", "bijli"]):
-        category = "Thunderstorm"
-    elif any(k in text_lower for k in ["heat", "heatwave", "loo", "scorching"]):
-        category = "Heatwave"
-    elif any(k in text_lower for k in ["dust", "andhi", "sandstorm"]):
-        category = "Dust Storm"
-    elif any(k in text_lower for k in ["wind", "cyclone", "gale", "gust"]):
-        category = "Strong Winds"
-    elif any(k in text_lower for k in ["fog", "smog", "mist"]):
-        category = "Fog"
-
-    # 2. Credibility Check
-    clickbait_cues = ["apocalypse", "run for your life", "shocking video", "omg", "breaking!", "destroy everything"]
-    is_suspicious = any(cue in text_lower for cue in clickbait_cues)
-    status = "SUSPICIOUS" if is_suspicious else "VERIFIED"
-    score = 0.35 if is_suspicious else 0.85
-
-    # 3. Location NER
-    lat, lon, city, state = resolve_location(text, report.get("lat"), report.get("lon"))
-
-    # 4. Save to Supabase
-    all_possible_fields = {
-        "city": city,
-        "state": state,
-        "event_type": category,
-        "description": text[:1000],
-        "latitude": lat,
-        "longitude": lon,
-        "status": status,
-        "trust_score": int(score * 100),
-        "media_url": report.get("media_url") or "",
-        "area": city,
-        # Extended schema fields
-        "source_type": report.get("source", "social_media"),
-        "original_text": text,
-        "clean_text": text,
-        "category": category,
-        "verification_status": status,
-        "credibility_score": score
+    field_mappings = {
+        "source_type": "source_type",
+        "original_text": "original_text" if "original_text" in TABLE_COLUMNS else "description",
+        "category": "category" if "category" in TABLE_COLUMNS else "event_type",
+        "verification_status": "verification_status" if "verification_status" in TABLE_COLUMNS else "status",
+        "credibility_score": "credibility_score" if "credibility_score" in TABLE_COLUMNS else "trust_score",
+        "city": "city",
+        "state": "state",
+        "latitude": "latitude",
+        "longitude": "longitude",
+        "media_url": "media_url",
+        "created_at": "created_at",
+        "area": "area"
     }
 
-    # Dynamically match active columns in Supabase
-    if TABLE_COLUMNS:
-        insert_payload = {k: v for k, v in all_possible_fields.items() if k in TABLE_COLUMNS}
-    else:
-        insert_payload = {
-            "city": city,
-            "state": state,
-            "event_type": category,
-            "description": text[:1000],
-            "latitude": lat,
-            "longitude": lon,
-            "status": status,
-            "trust_score": int(score * 100),
-            "media_url": report.get("media_url") or "",
-            "area": city
-        }
+    adapted = {}
+    for key, val in row.items():
+        col = field_mappings.get(key, key)
+        if col in TABLE_COLUMNS:
+            if col == "trust_score" and isinstance(val, float) and val <= 1.0:
+                adapted[col] = int(val * 100)
+            else:
+                adapted[col] = val
 
-    try:
-        supabase.table("weather_reports").insert(insert_payload).execute()
-        print(f"[Supabase] [OK] Saved {report_id} as {status} [{category} in {city}, {state}] (Trust: {int(score*100)}%)")
-    except Exception as e:
-        err_msg = str(e)
-        if "PGRST204" in err_msg or "column" in err_msg.lower():
-            # Fallback for base columns
-            fallback_payload = {
-                "city": city,
-                "state": state,
-                "event_type": category,
-                "description": text[:1000],
-                "latitude": lat,
-                "longitude": lon,
-                "status": status,
-                "trust_score": int(score * 100),
-                "media_url": report.get("media_url") or ""
-            }
-            try:
-                supabase.table("weather_reports").insert(fallback_payload).execute()
-                print(f"[Supabase Fallback] [OK] Saved {report_id} as {status} [{category} in {city}]")
-            except Exception as e2:
-                print(f"[DB Error Fallback] {e2}")
-        else:
-            print(f"[DB Error] {e}")
+    if "area" in TABLE_COLUMNS and "area" not in adapted:
+        adapted["area"] = row.get("city", "General Station")
 
-def process_stream(run_once: bool = False):
-    last_id = "0"  # Start reading from the beginning of the stream
-    print(f"[AI Worker] Listening to Redis Stream '{STREAM_NAME}'...")
+    return adapted
 
-    processed_any = False
-    consecutive_empty = 0
+def dispatch_emergency_alerts(report):
+    """Sends Webhook and SMS alerts for critical weather threats."""
+    city = report.get("city", "India Region")
+    category = report.get("category", "Severe Weather")
+    severity = report.get("severity", "CRITICAL")
+    
+    alert_msg = f"🚨 [ATMOS DISASTER ALERT] {severity}: Verified {category} detected in {city}! Immediate civil attention advised."
+
+    # 1. Webhook Notification
+    if WEBHOOK_URL and not WEBHOOK_URL.startswith("https://discord.com/api/webhooks/your"):
+        try:
+            requests.post(WEBHOOK_URL, json={"content": alert_msg}, timeout=4.0)
+        except Exception as e:
+            print(f"[Alert Webhook Failed]: {e}")
+
+    # 2. Twilio SMS Notification
+    if twilio_client and AUTHORITY_PHONE and TWILIO_FROM and not TWILIO_FROM.startswith("+123456"):
+        try:
+            twilio_client.messages.create(
+                body=alert_msg,
+                from_=TWILIO_FROM,
+                to=AUTHORITY_PHONE
+            )
+            print(f"[SMS Dispatched] Sent critical alert to {AUTHORITY_PHONE}")
+        except Exception as e:
+            print(f"[Twilio SMS Failed]: {e}")
+    elif AUTHORITY_PHONE:
+        print(f"[Alert System] SMS alert triggered for {city} (Twilio credentials pending in .env)")
+
+def determine_severity(category, text):
+    """Calculates danger rating based on verified physical metrics."""
+    danger_cues = ["submerged", "cloudburst", "evacuate", "collapsed", "fatal", "47°", "48°", "cyclone"]
+    if any(k in text.lower() for k in danger_cues) or category in ["Flooding", "Thunderstorm", "Dust Storm"]:
+        return "CRITICAL"
+    return "MODERATE"
+
+def process_stream():
+    last_id = os.getenv("REDIS_STREAM_LAST_ID", "$")  # Default: Read only new incoming messages
+    buffer = []
+    last_flush_time = time.time()
+    
+    print(f"[AI Stream Worker] Listening to stream: {STREAM_NAME} (Batch size: {BATCH_SIZE})")
 
     while True:
         try:
-            # XREAD: Pull from the message broker in blocks
-            messages = r.xread({STREAM_NAME: last_id}, count=5, block=2000)
+            entries = r.xread({STREAM_NAME: last_id}, count=BATCH_SIZE, block=1000)
+            
+            if entries:
+                for stream_name, messages in entries:
+                    for msg_id, data in messages:
+                        last_id = msg_id
+                        payload = json.loads(data['report'])
+                        
+                        raw_text = payload.get("text", "")
+                        category = payload.get("category", "Rainfall")
+                        status = payload.get("verification_status", "VERIFIED")
+                        severity = determine_severity(category, raw_text)
+                        
+                        processed_row = {
+                            "source_type": payload.get("source", "stream_feed"),
+                            "original_text": raw_text,
+                            "media_url": payload.get("media_url"),
+                            "category": category,
+                            "city": payload.get("city", "General Station"),
+                            "state": payload.get("state", "National"),
+                            "latitude": payload.get("lat", 20.5937),
+                            "longitude": payload.get("lon", 78.9629),
+                            "verification_status": status,
+                            "credibility_score": payload.get("credibility_score", 0.85),
+                            "created_at": payload.get("created_at") or time.strftime('%Y-%m-%dT%H:%M:%SZ')
+                        }
+                        
+                        buffer.append(processed_row)
 
-            if not messages:
-                if run_once:
-                    consecutive_empty += 1
-                    if consecutive_empty >= 2:
-                        print("[AI Worker] Stream queue drained in run-once mode.")
-                        break
-                continue
+                        if status == "VERIFIED" and severity == "CRITICAL":
+                            processed_row["severity"] = severity
+                            dispatch_emergency_alerts(processed_row)
 
-            consecutive_empty = 0
-            for stream, msg_list in messages:
-                for msg_id, msg_data in msg_list:
-                    last_id = msg_id
-                    processed_any = True
-                    try:
-                        raw = msg_data.get("report") or "{}"
-                        report = json.loads(raw)
-                        print(f"\n[AI Worker] Dequeued stream message {msg_id} -> report: {report.get('id')}")
-                        process_single_report(report)
-                    except Exception as parse_err:
-                        print(f"[AI Worker] JSON parse error on {msg_id}: {parse_err}")
+            # Flush buffer when threshold reached or time interval elapsed
+            time_since_flush = time.time() - last_flush_time
+            if (len(buffer) >= BATCH_SIZE) or (buffer and time_since_flush >= FLUSH_INTERVAL_SECONDS):
+                print(f"[DB Batch] Inserting {len(buffer)} records into Supabase...")
+                insert_batch = [format_row_for_supabase(item) for item in buffer]
+                supabase.table("weather_reports").insert(insert_batch).execute()
+                buffer.clear()
+                last_flush_time = time.time()
 
-            if run_once and processed_any:
-                print("[AI Worker] Completed batch from stream.")
-                break
-
-        except redis.exceptions.ConnectionError:
-            print("[AI Worker] Waiting for Redis server on port 6379...")
-            time.sleep(3)
-        except KeyboardInterrupt:
-            print("\n[AI Worker] Terminated by user.")
-            break
+        except Exception as err:
+            print(f"[Stream Worker Error] {err}")
+            time.sleep(2)
 
 if __name__ == "__main__":
-    is_once = "--once" in sys.argv
-    process_stream(run_once=is_once)
+    process_stream()
