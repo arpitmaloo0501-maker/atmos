@@ -8,11 +8,13 @@
     "start:worker": "node alertWorker.js",
     "start:collector": "node collector.js",
     "start:ai": "python ai_engine.py",
+    "start:ai-worker": "python ai_worker.py",
     "test:worker": "node testWorker.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.109.0",
     "dotenv": "^17.4.2",
+    "ioredis": "^6.0.0",
     "twilio": "^6.1.0",
     "ws": "^8.21.3"
   }
