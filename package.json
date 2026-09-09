@@ -6,6 +6,8 @@
   "scripts": {
     "start": "node server.js",
     "start:worker": "node alertWorker.js",
+    "start:collector": "node collector.js",
+    "start:ai": "python ai_engine.py",
     "test:worker": "node testWorker.js"
   },
   "dependencies": {

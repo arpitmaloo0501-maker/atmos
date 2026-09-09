@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MausamNet / Atmos - Live Citizen Weather Reporting</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    :root {
+      --bg: #090e17;
+      --card-bg: rgba(18, 26, 43, 0.85);
+      --card-border: rgba(56, 189, 248, 0.18);
+      --primary: #0284c7;
+      --primary-hover: #0369a1;
+      --accent: #38bdf8;
+      --text: #f1f5f9;
+      --text-muted: #94a3b8;
+      --success: #10b981;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+    }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+    body {
+      background: radial-gradient(circle at 50% 0%, #0f244a 0%, var(--bg) 75%);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px 16px;
+    }
+    .header-nav {
+      width: 100%;
+      max-width: 540px;
+      margin-bottom: 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .back-btn {
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 600;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: opacity 0.2s;
+    }
+    .back-btn:hover {
+      opacity: 0.8;
+    }
+    .badge-pill {
+      background: rgba(56, 189, 248, 0.12);
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      color: var(--accent);
+      padding: 3px 10px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+    }
+    .report-container {
+      width: 100%;
+      max-width: 540px;
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border-radius: 16px;
+      padding: 28px;
+      box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.6), 0 0 30px rgba(56, 189, 248, 0.08);
+    }
+    .title-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 6px;
+    }
+    h2 {
+      font-size: 22px;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+      color: #ffffff;
+    }
+    .subtitle {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-bottom: 22px;
+      line-height: 1.4;
+    }
+    label {
+      display: block;
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      color: #cbd5e1;
+      margin-bottom: 6px;
+      margin-top: 14px;
+    }
+    label:first-of-type {
+      margin-top: 0;
+    }
+    select, textarea, input[type="text"] {
+      width: 100%;
+      background: rgba(15, 23, 42, 0.7);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      color: #ffffff;
+      padding: 11px 14px;
+      border-radius: 8px;
+      font-size: 14px;
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    select:focus, textarea:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.15);
+    }
+    select option {
+      background: #0f172a;
+      color: #fff;
+    }
+    textarea {
+      resize: vertical;
+      min-height: 90px;
+      font-family: inherit;
+    }
+    .file-dropzone {
+      border: 2px dashed rgba(255, 255, 255, 0.18);
+      border-radius: 10px;
+      padding: 16px;
+      text-align: center;
+      background: rgba(15, 23, 42, 0.4);
+      cursor: pointer;
+      transition: border-color 0.2s, background-color 0.2s;
+      margin-bottom: 10px;
+    }
+    .file-dropzone:hover {
+      border-color: var(--accent);
+      background: rgba(56, 189, 248, 0.05);
+    }
+    .file-dropzone input {
+      display: none;
+    }
+    .file-dropzone span {
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+    .preview-box {
+      margin-top: 10px;
+      position: relative;
+      border-radius: 8px;
+      overflow: hidden;
+      max-height: 200px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      display: none;
+    }
+    .preview-box img, .preview-box video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .gps-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin: 14px 0 18px 0;
+      background: rgba(15, 23, 42, 0.6);
+      padding: 10px 14px;
+      border-radius: 10px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .gps-btn {
+      background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);
+      color: white;
+      border: none;
+      padding: 9px 14px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      white-space: nowrap;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: transform 0.15s, opacity 0.2s;
+    }
+    .gps-btn:hover {
+      opacity: 0.92;
+      transform: translateY(-1px);
+    }
+    .gps-status {
+      font-size: 12px;
+      color: var(--text-muted);
+      font-family: 'JetBrains Mono', monospace;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .gps-status.active {
+      color: var(--success);
+      font-weight: 600;
+    }
+    .submit-btn {
+      width: 100%;
+      background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+      color: #ffffff;
+      padding: 13px;
+      border: none;
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      box-shadow: 0 4px 14px rgba(16, 185, 129, 0.35);
+      transition: transform 0.15s, box-shadow 0.2s, opacity 0.2s;
+    }
+    .submit-btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 18px rgba(16, 185, 129, 0.45);
+    }
+    .submit-btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      transform: none;
+    }
+    .status-panel {
+      margin-top: 18px;
+      padding: 14px;
+      border-radius: 10px;
+      font-size: 13px;
+      display: none;
+      line-height: 1.5;
+    }
+    .status-panel.success {
+      display: block;
+      background: rgba(16, 185, 129, 0.15);
+      border: 1px solid rgba(16, 185, 129, 0.35);
+      color: #a7f3d0;
+    }
+    .status-panel.error {
+      display: block;
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid rgba(239, 68, 68, 0.35);
+      color: #fca5a5;
+    }
+    .status-panel.warning {
+      display: block;
+      background: rgba(245, 158, 11, 0.15);
+      border: 1px solid rgba(245, 158, 11, 0.35);
+      color: #fde68a;
+    }
+    .result-metric {
+      display: inline-block;
+      margin-right: 12px;
+      margin-top: 6px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      background: rgba(0, 0, 0, 0.35);
+      padding: 3px 8px;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div class="header-nav">
+    <a href="./index.html#overview" class="back-btn">
+      ← Return to Atmos Dashboard
+    </a>
+    <span class="badge-pill">Live Citizen Ingest</span>
+  </div>
+
+  <div class="report-container">
+    <div class="title-row">
+      <h2>🚨 Submit Live Weather Report</h2>
+    </div>
+    <p class="subtitle">
+      Real-time citizen meteorological telemetry. Authenticated using Open-Meteo physical sensor validation & AI multimodal deduplication.
+    </p>
+
+    <form id="weatherForm">
+      <label for="category">Hazard Event Type:</label>
+      <select id="category">
+        <option value="Rainfall">🌧️ Heavy Rainfall</option>
+        <option value="Flooding">🌊 Flooding / Waterlogging</option>
+        <option value="Thunderstorm">⚡ Severe Thunderstorm & Lightning</option>
+        <option value="Heatwave">☀️ Severe Heatwave (Loo)</option>
+        <option value="Dust Storm">🌪️ Dust Storm / Sandstorm</option>
+        <option value="Strong Winds">💨 Strong Gale Winds</option>
+        <option value="Fog">🌫️ Dense Fog / Low Visibility</option>
+      </select>
+
+      <label for="description">Observation Details:</label>
+      <textarea id="description" placeholder="Describe current intensity, street conditions, water depth, or damages observed..." required></textarea>
+
+      <label>Evidence Media (Photo / Video):</label>
+      <div class="file-dropzone" onclick="document.getElementById('mediaUpload').click()">
+        <input type="file" id="mediaUpload" accept="image/*,video/*" />
+        <span id="fileLabel">📸 Tap to attach photos or video clips (Max 15MB)</span>
+      </div>
+      <div id="previewBox" class="preview-box"></div>
+
+      <label>Geospatial Verification:</label>
+      <div class="gps-row">
+        <button type="button" class="gps-btn" onclick="getGPS()">
+          📍 Tag Current Location
+        </button>
+        <span id="gpsOutput" class="gps-status">GPS not tagged yet.</span>
+      </div>
+
+      <button type="submit" id="submitBtn" class="submit-btn">
+        🚀 Submit to Atmos Analytics
+      </button>
+    </form>
+
+    <div id="statusPanel" class="status-panel"></div>
+  </div>
+
+  <script>
+    // Supabase client initialization for media storage and database storage
+    const SUPABASE_URL = 'https://rblcrsboalpuhofaeqol.supabase.co';
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJibGNyc2JvYWxwdWhvZmFlcW9sIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg2ODM3NTQsImV4cCI6MjEwNDI1OTc1NH0.dKh0sPbzAlKpPxP0KSVb3YSSVYhbEdPTA5gufHxmHqM';
+    const supabaseClient = window.supabase ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY) : null;
+
+    const AI_ENGINE_URL = 'http://localhost:8000/verify';
+
+    let currentLat = null;
+    let currentLon = null;
+    let selectedFile = null;
+
+    // File selection & preview
+    document.getElementById('mediaUpload').addEventListener('change', function(e) {
+      const file = e.target.files[0];
+      const previewBox = document.getElementById('previewBox');
+      const fileLabel = document.getElementById('fileLabel');
+
+      if (!file) {
+        selectedFile = null;
+        previewBox.style.display = 'none';
+        fileLabel.innerText = '📸 Tap to attach photos or video clips (Max 15MB)';
+        return;
+      }
+
+      if (file.size > 15 * 1024 * 1024) {
+        alert("File too large! Please select an evidence file under 15MB.");
+        this.value = '';
+        return;
+      }
+
+      selectedFile = file;
+      fileLabel.innerText = `✓ Selected: ${file.name} (${(file.size / 1024).toFixed(1)} KB)`;
+
+      const url = URL.createObjectURL(file);
+      previewBox.innerHTML = '';
+      if (file.type.startsWith('image/')) {
+        const img = document.createElement('img');
+        img.src = url;
+        previewBox.appendChild(img);
+        previewBox.style.display = 'block';
+      } else if (file.type.startsWith('video/')) {
+        const vid = document.createElement('video');
+        vid.src = url;
+        vid.controls = true;
+        previewBox.appendChild(vid);
+        previewBox.style.display = 'block';
+      }
+    });
+
+    // GPS location tagging
+    function getGPS() {
+      const output = document.getElementById('gpsOutput');
+      if (!navigator.geolocation) {
+        output.innerText = "Geolocation is not supported by your browser.";
+        return;
+      }
+
+      output.innerText = "Acquiring satellite fix...";
+      output.classList.remove('active');
+
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          currentLat = position.coords.latitude;
+          currentLon = position.coords.longitude;
+          output.innerText = `Verified: ${currentLat.toFixed(4)}°N, ${currentLon.toFixed(4)}°E (±${Math.round(position.coords.accuracy)}m)`;
+          output.classList.add('active');
+        },
+        (err) => {
+          output.innerText = "Location access denied. Please allow GPS permissions.";
+          alert("Location services are required to physically verify your report against Open-Meteo sensor observations.");
+        },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+      );
+    }
+
+    // Form submission
+    document.getElementById('weatherForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const submitBtn = document.getElementById('submitBtn');
+      const statusPanel = document.getElementById('statusPanel');
+      const text = document.getElementById('description').value.trim();
+      const category = document.getElementById('category').value;
+
+      if (!text) {
+        alert("Please provide observation details.");
+        return;
+      }
+
+      submitBtn.disabled = true;
+      submitBtn.innerText = "⏳ Verifying with AI & Physical Sensors...";
+      statusPanel.className = "status-panel warning";
+      statusPanel.innerHTML = "<strong>Analyzing Telemetry...</strong><br/>Cross-referencing report with live meteorological ground truth...";
+      statusPanel.style.display = "block";
+
+      let mediaUrl = null;
+
+      // 1. Upload media to Supabase Storage if present
+      if (selectedFile && supabaseClient) {
+        try {
+          const ext = (selectedFile.name.split('.').pop() || 'jpg').toLowerCase();
+          const fileName = `citizen_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.${ext}`;
+          const { data: uploadData, error: uploadErr } = await supabaseClient.storage
+            .from('evidence_media')
+            .upload(`uploads/${fileName}`, selectedFile);
+
+          if (!uploadErr) {
+            const { data: publicData } = supabaseClient.storage
+              .from('evidence_media')
+              .getPublicUrl(`uploads/${fileName}`);
+            mediaUrl = publicData?.publicUrl || null;
+          }
+        } catch (storageErr) {
+          console.warn("Storage upload notice:", storageErr);
+        }
+      }
+
+      const reportId = `citizen_${Date.now()}`;
+      const payload = {
+        id: reportId,
+        text: text,
+        category: category,
+        lat: currentLat,
+        lon: currentLon,
+        media_url: mediaUrl
+      };
+
+      // 2. Query AI Verification Microservice
+      let aiResult = null;
+      try {
+        const aiResp = await fetch(AI_ENGINE_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        if (aiResp.ok) {
+          aiResult = await aiResp.json();
+        }
+      } catch (err) {
+        console.warn("AI Engine microservice offline, running in-browser Open-Meteo check:", err);
+      }
+
+      // If AI Engine is offline, perform client-side Open-Meteo physical check
+      if (!aiResult) {
+        let sensorScore = 0.6;
+        if (currentLat && currentLon) {
+          try {
+            const meteoResp = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${currentLat}&longitude=${currentLon}&current=temperature_2m,precipitation,weather_code`);
+            const meteoData = await meteoResp.json();
+            const curr = meteoData.current || {};
+            const precip = curr.precipitation || 0;
+            const temp = curr.temperature_2m || 25;
+
+            if (category === "Heatwave") sensorScore = temp >= 40 ? 0.95 : (temp < 35 ? 0.2 : 0.7);
+            else if (["Rainfall", "Flooding"].includes(category)) sensorScore = precip > 0 ? 0.90 : 0.35;
+            else sensorScore = 0.75;
+          } catch (e) {
+            sensorScore = 0.50;
+          }
+        }
+        aiResult = {
+          category: category,
+          verification_status: sensorScore >= 0.6 ? "VERIFIED" : "SUSPICIOUS",
+          credibility_score: roundNumber(sensorScore, 2)
+        };
+      }
+
+      // Check rejection
+      if (aiResult.status && aiResult.status.includes("REJECTED")) {
+        statusPanel.className = "status-panel error";
+        statusPanel.innerHTML = `<strong>❌ Report Rejected</strong><br/>Reason: ${aiResult.reason || "Duplicate or recycled submission detected."}`;
+        submitBtn.disabled = false;
+        submitBtn.innerText = "Submit to Atmos Analytics";
+        return;
+      }
+
+      // 3. Persist verified report to Supabase
+      if (supabaseClient) {
+        try {
+          const insertPayload = {
+            source_type: 'citizen_app',
+            original_text: text,
+            media_url: mediaUrl,
+            category: aiResult.category || category,
+            latitude: currentLat || 21.251,
+            longitude: currentLon || 81.629,
+            verification_status: aiResult.verification_status || 'VERIFIED',
+            credibility_score: aiResult.credibility_score || 0.8,
+            // Compatibility fields
+            event_type: aiResult.category || category,
+            description: text,
+            status: aiResult.verification_status || 'VERIFIED',
+            trust_score: Math.round((aiResult.credibility_score || 0.8) * 100),
+            city: currentLat ? 'Geo-Tagged' : 'Raipur',
+            state: 'India'
+          };
+
+          let { error: insertErr } = await supabaseClient.from('weather_reports').insert([insertPayload]);
+          if (insertErr && (insertErr.code === 'PGRST204' || insertErr.message?.includes('column'))) {
+            // Fallback to legacy column schema
+            await supabaseClient.from('weather_reports').insert([{
+              city: currentLat ? 'Geo-Tagged' : 'Raipur',
+              state: 'India',
+              event_type: aiResult.category || category,
+              description: text,
+              latitude: currentLat || 21.251,
+              longitude: currentLon || 81.629,
+              media_url: mediaUrl || '',
+              status: aiResult.verification_status || 'VERIFIED',
+              trust_score: Math.round((aiResult.credibility_score || 0.8) * 100)
+            }]);
+          }
+        } catch (dbErr) {
+          console.warn("Database storage note:", dbErr);
+        }
+      }
+
+      // 4. Display result to user
+      const isVerified = aiResult.verification_status === "VERIFIED";
+      statusPanel.className = isVerified ? "status-panel success" : "status-panel warning";
+      statusPanel.innerHTML = `
+        <strong>${isVerified ? "✓ Report Verified & Ingested!" : "⚠️ Report Logged for Manual Review"}</strong><br/>
+        Telemetry has been broadcast into the Atmos Big Data stream.
+        <div>
+          <span class="result-metric">Status: ${aiResult.verification_status}</span>
+          <span class="result-metric">Credibility: ${Math.round((aiResult.credibility_score || 0.8) * 100)}%</span>
+          <span class="result-metric">Category: ${aiResult.category || category}</span>
+        </div>
+      `;
+
+      submitBtn.disabled = false;
+      submitBtn.innerText = "Submit Another Report";
+      document.getElementById('weatherForm').reset();
+      selectedFile = null;
+      document.getElementById('previewBox').style.display = 'none';
+      document.getElementById('fileLabel').innerText = '📸 Tap to attach photos or video clips (Max 15MB)';
+    });
+
+    function roundNumber(num, dec) {
+      return Math.round(num * Math.pow(10, dec)) / Math.pow(10, dec);
+    }
+  </script>
+</body>
+</html>

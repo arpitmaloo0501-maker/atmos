@@ -4532,6 +4532,36 @@ function CitizenReport() {
     }
 
     // --- METEOROLOGICAL AI/ML PIPELINE (Categorization, Credibility, Deduplication) ---
+    // 1. Query Python AI Engine microservice if online
+    try {
+      const aiMicroResp = await fetch("http://localhost:8000/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: `citizen_${Date.now()}`,
+          text: desc || `${event} in ${city}, ${state}`,
+          media_url: mediaUrl,
+          lat: lat,
+          lon: lng,
+          category: event
+        })
+      });
+      if (aiMicroResp.ok) {
+        const microData = await aiMicroResp.json();
+        if (microData.status && microData.status.includes("REJECTED")) {
+          toast({ type: "err", title: "Submission Rejected", desc: microData.reason || "Duplicate or recycled submission." });
+          setIsUploading(false);
+          return;
+        }
+        if (microData.credibility_score !== undefined) {
+          aiScore = Math.round(microData.credibility_score * 100);
+          aiStatus = microData.verification_status || aiStatus;
+        }
+      }
+    } catch (microErr) {
+      // microservice offline, gracefully proceeds with built-in Open-Meteo & client analyzeReport
+    }
+
     const aiAnalysis = analyzeReport({
       text: desc || `${event} in ${city}, ${state}`,
       city: city,
@@ -4552,23 +4582,43 @@ function CitizenReport() {
     const resolvedStatus = aiAnalysis.verification_status === "REJECTED" ? "Suspicious" : (isTrue ? "Verified" : aiAnalysis.verification_status);
     const resolvedEvent = event === "Other" && aiAnalysis.category !== "Other" ? aiAnalysis.category : event;
 
-    // --- SUPABASE DATABASE MEIN SAVE KARNA ---
-    const { data, error } = await supabase
-      .from('weather_reports')
-      .insert([
-        { 
-          event_type: resolvedEvent, 
-          state: state, 
-          city: city, 
-          area: area, 
-          description: desc,
-          latitude: lat,
-          longitude: lng,
-          status: resolvedStatus,
-          trust_score: combinedTrust,
-          media_url: mediaUrl
-        }
-      ]);
+    // --- SUPABASE DATABASE MEIN SAVE KARNA (Dual Schema Support) ---
+    const primaryPayload = { 
+      event_type: resolvedEvent, 
+      state: state, 
+      city: city, 
+      area: area, 
+      description: desc,
+      latitude: lat,
+      longitude: lng,
+      status: resolvedStatus,
+      trust_score: combinedTrust,
+      media_url: mediaUrl,
+      source_type: 'citizen_app',
+      original_text: desc,
+      category: resolvedEvent,
+      verification_status: resolvedStatus,
+      credibility_score: Math.round(combinedTrust) / 100
+    };
+
+    let { data, error } = await supabase.from('weather_reports').insert([primaryPayload]);
+    if (error && (error.code === 'PGRST204' || error.message?.includes('column'))) {
+      // Fallback for pre-migration schema
+      const fallbackPayload = {
+        event_type: resolvedEvent, 
+        state: state, 
+        city: city, 
+        area: area, 
+        description: desc,
+        latitude: lat,
+        longitude: lng,
+        status: resolvedStatus,
+        trust_score: combinedTrust,
+        media_url: mediaUrl
+      };
+      const res = await supabase.from('weather_reports').insert([fallbackPayload]);
+      error = res.error;
+    }
 
     setIsUploading(false);
 
@@ -4737,11 +4787,17 @@ function CitizenReport() {
     }, this);
   }
   return /* @__PURE__ */ jsxDEV("div", { style: { maxWidth: 780, margin: "0 auto" }, children: [
-    /* @__PURE__ */ jsxDEV(PageHead, { title: "Report a Weather Event", sub: "Help us build real-time weather intelligence for India." }, void 0, false, {
-      fileName: "<stdin>",
-      lineNumber: 818,
-      columnNumber: 7
-    }, this),
+    /* @__PURE__ */ jsxDEV(PageHead, { 
+      title: "Report a Weather Event", 
+      sub: "Help us build real-time weather intelligence for India.",
+      right: /* @__PURE__ */ jsxDEV("a", { 
+        href: "/citizen_report.html", 
+        target: "_blank", 
+        className: "btn", 
+        style: { textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 600 },
+        children: "📱 Open Standalone Portal ↗"
+      }, void 0, false)
+    }, void 0, false),
     /* @__PURE__ */ jsxDEV("form", { className: "card", style: { padding: "22px 24px" }, onSubmit: submit, children: [
       /* @__PURE__ */ jsxDEV("div", { className: "field", style: { marginBottom: 18 }, children: [
         /* @__PURE__ */ jsxDEV("label", { children: "Event Type" }, void 0, false, {
