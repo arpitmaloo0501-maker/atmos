@@ -1,37 +1,35 @@
-# LLM Meteorological Architect Prompt
+# Meteorological Intelligence & Ground-Truth Verification Prompt
 
-This document defines the production system prompt, output schema, and integration patterns for replacing or augmenting the local NLP logic with a generative LLM (such as Google Gemini 1.5/2.0 or Claude) for advanced meteorological parsing in the Atmos / MausamNet platform.
+You are an expert Meteorological Analyst for India's National Weather Big Data Analytics Platform.
+Analyze the provided citizen observation or social media post and produce structured validation metadata.
 
----
+### Input Data
+- Text: "{text}"
+- Source Claimed Category: "{claimed_category}"
+- Physical Sensor Ground Truth: {sensor_telemetry}
 
-## 1. System Prompt Template
+### Evaluation Criteria:
+1. **Deduplication Check**: Flag if the report represents recycled viral posts or boilerplate text.
+2. **Category Mapping**: Must match exactly one of: "Rainfall", "Thunderstorm", "Flooding", "Heatwave", "Fog", "Dust Storm", "Strong Winds", or "Other".
+3. **Physical Feasibility Check**: Compare claims with telemetry:
+   - If Heatwave claimed (>40°C) but sensor reports <32°C -> Reject.
+   - If Heavy Rain/Flood claimed but station records 0.0mm -> Flag Suspicious/Reject.
+4. **Source Credibility**: Disqualify sensationalist phrases ("end of days", "apocalypse", clickbait links).
 
-```text
-You are an expert meteorological intelligence analyst for the Atmos Big Data Platform.
-Analyze the following citizen weather report: "{text}"
-
-Rules:
-1. Categorize into exactly one: "Rainfall", "Thunderstorm", "Flooding", "Heatwave", "Fog", "Dust Storm", "Strong Winds", or "Other".
-2. Assess linguistic credibility. Flag extreme exaggeration, panic-mongering, or sarcasm.
-3. Assign verification_status: "VERIFIED", "SUSPICIOUS", or "REJECTED".
-4. Output strictly valid JSON matching this schema:
-{"category": "string", "verification_status": "string", "credibility_score": "float", "extracted_locations": ["string"]}
+### Output Format (Strict JSON Only):
+```json
+{
+  "category": "Rainfall" | "Thunderstorm" | "Flooding" | "Heatwave" | "Fog" | "Dust Storm" | "Strong Winds" | "Other",
+  "verification_status": "VERIFIED" | "SUSPICIOUS" | "REJECTED",
+  "credibility_score": 0.0 to 1.0,
+  "confidence_explanation": "string explaining sensor correlation or linguistic cues",
+  "affected_districts": ["string"]
+}
 ```
 
 ---
 
-## 2. JSON Schema Specification
-
-| Field | Type | Description | Allowed Values |
-| :--- | :--- | :--- | :--- |
-| `category` | `string` | Primary meteorological hazard event type | `"Rainfall"`, `"Thunderstorm"`, `"Flooding"`, `"Heatwave"`, `"Fog"`, `"Dust Storm"`, `"Strong Winds"`, `"Other"` |
-| `verification_status` | `string` | Intelligence trustworthiness classification | `"VERIFIED"` (plausible, factual report)<br/>`"SUSPICIOUS"` (exaggerated or sensational)<br/>`"REJECTED"` (spam, hoax, or irrelevant) |
-| `credibility_score` | `float` | Continuous confidence rating | `0.0` to `1.0` |
-| `extracted_locations` | `array[string]` | Specific cities, neighborhoods, landmarks, or districts mentioned | e.g. `["Raipur", "Telibandha Lake"]`, `["Mumbai", "Andheri Subway"]` |
-
----
-
-## 3. Python Integration Example (Google Gemini SDK)
+### Python Integration Pattern (Gemini 2.0 / OpenAI / Anthropic)
 
 ```python
 import json
@@ -41,58 +39,28 @@ from google.genai import types
 
 client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
-def analyze_weather_report_llm(text: str) -> dict:
-    prompt = f"""You are an expert meteorological intelligence analyst for the Atmos Big Data Platform.
-Analyze the following citizen weather report: "{text}"
+def verify_observation_with_llm(text: str, claimed_category: str, sensor_telemetry: dict) -> dict:
+    prompt = f"""You are an expert Meteorological Analyst for India's National Weather Big Data Analytics Platform.
+Analyze the provided citizen observation or social media post and produce structured validation metadata.
 
-Rules:
-1. Categorize into exactly one: "Rainfall", "Thunderstorm", "Flooding", "Heatwave", "Fog", "Dust Storm", "Strong Winds", or "Other".
-2. Assess linguistic credibility. Flag extreme exaggeration, panic-mongering, or sarcasm.
-3. Assign verification_status: "VERIFIED", "SUSPICIOUS", or "REJECTED".
-4. Output strictly valid JSON matching this schema:
-{{"category": "string", "verification_status": "string", "credibility_score": "float", "extracted_locations": ["string"]}}"""
+Input Data:
+- Text: "{text}"
+- Source Claimed Category: "{claimed_category}"
+- Physical Sensor Ground Truth: {json.dumps(sensor_telemetry)}
+
+Output strictly valid JSON matching this schema:
+{{
+  "category": "Rainfall" | "Thunderstorm" | "Flooding" | "Heatwave" | "Fog" | "Dust Storm" | "Strong Winds" | "Other",
+  "verification_status": "VERIFIED" | "SUSPICIOUS" | "REJECTED",
+  "credibility_score": 0.0 to 1.0,
+  "confidence_explanation": "string explaining sensor correlation or linguistic cues",
+  "affected_districts": ["string"]
+}}"""
 
     response = client.models.generate_content(
         model="gemini-2.0-flash",
         contents=prompt,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json"
-        )
+        config=types.GenerateContentConfig(response_mime_type="application/json")
     )
-    
     return json.loads(response.text)
-```
-
----
-
-## 4. Node.js Integration Example (Axios / Fetch)
-
-```javascript
-async function queryGeminiMeteorologist(reportText, apiKey) {
-  const prompt = `You are an expert meteorological intelligence analyst for the Atmos Big Data Platform.
-Analyze the following citizen weather report: "${reportText}"
-
-Rules:
-1. Categorize into exactly one: "Rainfall", "Thunderstorm", "Flooding", "Heatwave", "Fog", "Dust Storm", "Strong Winds", or "Other".
-2. Assess linguistic credibility. Flag extreme exaggeration, panic-mongering, or sarcasm.
-3. Assign verification_status: "VERIFIED", "SUSPICIOUS", or "REJECTED".
-4. Output strictly valid JSON matching this schema:
-{"category": "string", "verification_status": "string", "credibility_score": "float", "extracted_locations": ["string"]}`;
-
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { responseMimeType: "application/json" }
-      })
-    }
-  );
-
-  const result = await response.json();
-  const rawJson = result.candidates[0].content.parts[0].text;
-  return JSON.parse(rawJson);
-}
 ```
