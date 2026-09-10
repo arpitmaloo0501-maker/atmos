@@ -3,226 +3,247 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Citizen Weather Reporter | Atmos</title>
+    <title>Atmos Citizen Reporter</title>
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#0284c7">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <style>
-        body { 
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
-            background: #0f172a; 
-            color: #f8fafc; 
-            display: flex; 
-            flex-direction: column;
-            align-items: center; 
-            justify-content: center;
-            min-height: 100vh;
-            padding: 24px 20px; 
-            margin: 0;
-            box-sizing: border-box;
-        }
-        .header-nav {
-            width: 100%;
-            max-width: 480px;
-            margin-bottom: 14px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        .back-link {
-            color: #38bdf8;
-            text-decoration: none;
-            font-size: 13px;
-            font-weight: 600;
-        }
-        .back-link:hover {
-            text-decoration: underline;
-        }
-        .card { 
-            background: #1e293b; 
-            padding: 28px; 
-            border-radius: 12px; 
-            max-width: 480px; 
-            width: 100%; 
-            box-shadow: 0 10px 25px rgba(0,0,0,0.5); 
-            border: 1px solid #334155; 
-            box-sizing: border-box;
-        }
-        h2 { margin-top: 0; color: #38bdf8; font-size: 20px; }
-        label { display: block; font-size: 13px; color: #94a3b8; margin: 12px 0 6px; }
-        input, select, textarea, button { 
-            width: 100%; 
-            box-sizing: border-box; 
-            padding: 10px; 
-            border-radius: 6px; 
-            border: 1px solid #475569; 
-            background: #0f172a; 
-            color: white; 
-            font-family: inherit;
-        }
-        input:focus, select:focus, textarea:focus {
-            outline: none;
-            border-color: #38bdf8;
-        }
-        button.action-btn { 
-            background: #0284c7; 
-            color: white; 
-            border: none; 
-            font-weight: 600; 
-            cursor: pointer; 
-            margin-top: 18px; 
-            transition: background 0.15s;
-        }
-        button.action-btn:hover { background: #0369a1; }
-        button.action-btn:disabled { opacity: 0.6; cursor: not-allowed; }
-        .gps-badge { display: inline-block; font-size: 12px; color: #4ade80; margin-top: 6px; }
-        .result-box {
-            display: none;
-            margin-top: 16px;
-            padding: 12px 14px;
-            border-radius: 8px;
-            font-size: 13px;
-            line-height: 1.5;
-        }
-        .result-box.verified {
-            display: block;
-            background: rgba(16, 185, 129, 0.18);
-            border: 1px solid rgba(16, 185, 129, 0.4);
-            color: #a7f3d0;
-        }
-        .result-box.suspicious {
-            display: block;
-            background: rgba(245, 158, 11, 0.18);
-            border: 1px solid rgba(245, 158, 11, 0.4);
-            color: #fde68a;
-        }
-        .result-box.rejected {
-            display: block;
-            background: rgba(239, 68, 68, 0.18);
-            border: 1px solid rgba(239, 68, 68, 0.4);
-            color: #fca5a5;
-        }
+        body { font-family: 'Segoe UI', Tahoma, sans-serif; padding: 20px; background: #0f172a; color: white; }
+        .card { background: #1e293b; padding: 25px; border-radius: 12px; margin: 0 auto 20px auto; max-width: 500px; box-shadow: 0 10px 15px rgba(0,0,0,0.5); }
+        input, select, textarea, button { width: 100%; margin-top: 15px; padding: 12px; border-radius: 6px; border: 1px solid #334155; background: #0f172a; color: white; box-sizing: border-box; }
+        button { background: #0ea5e9; font-weight: bold; cursor: pointer; border: none; transition: 0.3s; }
+        button:hover { background: #0284c7; }
+        
+        #statusBox { margin-top: 20px; padding: 15px; border-radius: 8px; font-weight: bold; display: none; text-align: center; }
+        .offline-warning { background: #7f1d1d; color: #fca5a5; border: 1px solid #ef4444; }
+        .online-success { background: #14532d; color: #86efac; border: 1px solid #22c55e; }
+        
+        /* Reports Section Styles */
+        .report-item { background: #334155; padding: 12px; margin-top: 10px; border-radius: 6px; border-left: 4px solid #0ea5e9; }
+        .report-item.offline { border-left-color: #f59e0b; }
+        .report-item.verified { border-left-color: #22c55e; }
+        .report-item.rejected { border-left-color: #ef4444; }
     </style>
 </head>
 <body>
-<div class="header-nav">
-    <a href="./index.html#citizen" class="back-link">← Return to Atmos Dashboard</a>
-    <span style="font-size: 12px; color: #94a3b8; font-weight: 600;">PORTAL V2.0</span>
-</div>
 
-<div class="card">
-    <h2>📡 Submit Ground Observation</h2>
-    <p style="font-size: 13px; color: #94a3b8;">Reports are automatically cross-checked by the Atmos AI Engine against local Doppler and meteorological sensors.</p>
-    
-    <form id="citizenForm">
-        <label>Observation Details</label>
-        <textarea id="text" rows="3" placeholder="Describe the weather condition (e.g. Flooding near Dadar station #IMD)..." required></textarea>
+    <!-- Reporting Form -->
+    <div class="card">
+        <h2 style="margin-top: 0; color: #38bdf8;">🚨 Submit Weather Report</h2>
+        <form id="citizenForm">
+            <select id="category" required>
+                <option value="Rainfall">Heavy Rainfall</option>
+                <option value="Flooding">Flooding</option>
+                <option value="Cyclone">Cyclone / High Winds</option>
+                <option value="Heatwave">Severe Heatwave</option>
+            </select>
+            <textarea id="text" rows="4" placeholder="Describe the situation..." required></textarea>
+            
+            <button type="button" onclick="acquireGPS()" style="background: #475569;">📍 Attach My GPS Coordinates</button>
+            <p id="gpsStatus" style="font-size: 14px; color: #94a3b8; text-align: center; margin-top: 8px;">GPS: Not acquired yet</p>
+            
+            <button type="submit">Submit Emergency Report</button>
+        </form>
+        <div id="statusBox"></div>
+    </div>
 
-        <label>Reported Event Category</label>
-        <select id="category">
-            <option value="Rainfall">Rainfall</option>
-            <option value="Flooding">Flooding</option>
-            <option value="Thunderstorm">Thunderstorm</option>
-            <option value="Heatwave">Heatwave</option>
-            <option value="Fog">Fog</option>
-            <option value="Dust Storm">Dust Storm</option>
-            <option value="Strong Winds">Strong Winds</option>
-        </select>
+    <!-- Offline-Ready Reports Section -->
+    <div class="card">
+        <h3 style="margin-top: 0; color: #f8fafc;">📋 My Recent Reports</h3>
+        <div id="reportsList">
+            <p style="color: #94a3b8; font-size: 14px;">No reports submitted yet.</p>
+        </div>
+    </div>
 
-        <label>Photo/Video Media URL</label>
-        <input type="url" id="mediaUrl" placeholder="https://example.com/photo.jpg (Optional)">
+    <script>
+        let userLat = null; let userLon = null;
+        const statusBox = document.getElementById('statusBox');
 
-        <label>Location Coordinates</label>
-        <button type="button" onclick="acquireGPS()" style="background: #334155; cursor: pointer;">📍 Tag Current Device GPS</button>
-        <span id="gpsStatus" class="gps-badge">No GPS tagged (City NER will be used)</span>
+        if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(console.error);
 
-        <button type="submit" id="submitBtn" class="action-btn">Submit to Central Pipeline</button>
-    </form>
-
-    <div id="resultBox" class="result-box"></div>
-</div>
-
-<script>
-    let userLat = null;
-    let userLon = null;
-
-    if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('/sw.js');
-    }
-
-    function acquireGPS() {
-        if (navigator.geolocation) {
-            navigator.geolocation.getCurrentPosition(
-                (pos) => {
-                    userLat = pos.coords.latitude;
-                    userLon = pos.coords.longitude;
-                    document.getElementById('gpsStatus').innerText = `✓ Verified GPS: ${userLat.toFixed(4)}, ${userLon.toFixed(4)}`;
-                },
-                () => { alert("Location access denied. Named-Entity geocoding will be applied from text."); }
-            );
-        }
-    }
-
-    async function syncOfflineQueue() {
-        const queue = JSON.parse(localStorage.getItem('atmos_offline_reports') || '[]');
-        if (!queue.length) return;
-        
-        console.log(`[PWA] Online again. Syncing ${queue.length} cached offline reports...`);
-        const remaining = [];
-        
-        for (const item of queue) {
-            try {
-                await fetch('http://localhost:8000/verify', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(item)
-                });
-            } catch (e) {
-                remaining.push(item);
+        // --- GPS Logic ---
+        function acquireGPS() {
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(
+                    (pos) => {
+                        userLat = pos.coords.latitude; userLon = pos.coords.longitude;
+                        document.getElementById('gpsStatus').innerText = `✓ GPS Locked: ${userLat.toFixed(4)}, ${userLon.toFixed(4)}`;
+                    },
+                    () => { document.getElementById('gpsStatus').innerText = "❌ Location denied."; }
+                );
             }
         }
-        localStorage.setItem('atmos_offline_reports', JSON.stringify(remaining));
-        if (remaining.length === 0) alert("All offline reports synchronized successfully!");
-    }
 
-    window.addEventListener('online', syncOfflineQueue);
-
-    document.getElementById('citizenForm').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const payload = {
-            id: `citizen_${Date.now()}`,
-            text: document.getElementById('text').value,
-            media_url: document.getElementById('mediaUrl').value || null,
-            lat: userLat,
-            lon: userLon
-        };
-
-        if (!navigator.onLine) {
-            const queue = JSON.parse(localStorage.getItem('atmos_offline_reports') || '[]');
-            queue.push(payload);
-            localStorage.setItem('atmos_offline_reports', JSON.stringify(queue));
-            alert("⚠️ Network offline. Your report is securely queued and will automatically sync when connection returns.");
-            document.getElementById('citizenForm').reset();
-            return;
+        // --- UI & Storage Logic ---
+        function showNotification(msg, type) {
+            statusBox.style.display = 'block';
+            statusBox.className = type === 'error' ? 'offline-warning' : 'online-success';
+            statusBox.innerText = msg;
         }
 
-        try {
-            const resp = await fetch('http://localhost:8000/verify', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-            const result = await resp.json();
-            alert(`Report Accepted!\nStatus: ${result.verification_status}\nSeverity: ${result.category}`);
-            document.getElementById('citizenForm').reset();
-        } catch (err) {
-            alert("Server not responding. Saving report to local offline storage.");
-            const queue = JSON.parse(localStorage.getItem('atmos_offline_reports') || '[]');
-            queue.push(payload);
-            localStorage.setItem('atmos_offline_reports', JSON.stringify(queue));
+        function saveAndRenderReport(payload, syncStatus, trustScore = null) {
+            // Organize reports as an array of structured objects in local storage
+            const history = JSON.parse(localStorage.getItem('atmos_display_history') || '[]');
+            payload.syncStatus = syncStatus;
+            payload.trustScore = trustScore;
+            history.push(payload);
+            localStorage.setItem('atmos_display_history', JSON.stringify(history));
+            renderReports();
         }
-    });
-</script>
+
+        function renderReports() {
+            const history = JSON.parse(localStorage.getItem('atmos_display_history') || '[]');
+            const list = document.getElementById('reportsList');
+            
+            if (history.length === 0) return;
+
+            list.innerHTML = history.reverse().map(r => `
+                <div class="report-item ${r.syncStatus === 'offline' ? 'offline' : (r.trustScore >= 80 ? 'verified' : 'rejected')}">
+                    <strong>${r.category}</strong>
+                    <p style="margin: 5px 0; font-size: 14px;">${r.text}</p>
+                    <small style="color: #cbd5e1;">
+                        ${r.syncStatus === 'offline' ? '⏳ Queued (Offline)' : `✅ Synced (Trust Score: ${r.trustScore}%)`}
+                    </small>
+                </div>
+            `).join('');
+        }
+
+        // Render on page load
+        renderReports();
+
+        // --- Network Sync Logic ---
+        async function syncOfflineQueue() {
+            const queue = JSON.parse(localStorage.getItem('atmos_offline_queue') || '[]');
+            if (queue.length === 0) return;
+            
+            showNotification(`🔄 Reconnected! Syncing ${queue.length} offline reports...`, "success");
+            const remaining = [];
+            
+            for (const item of queue) {
+                try {
+                    let score = 50;
+                    try {
+                        const resp = await fetch('http://localhost:8000/verify', { 
+                            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(item)
+                        });
+                        if (resp.ok) {
+                            const data = await resp.json();
+                            score = data.trust_score;
+                        }
+                    } catch(e) {}
+
+                    // Forward to server ingest & database
+                    const ingestResp = await fetch('/ingest', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            event_type: item.category,
+                            text: item.text,
+                            lat: item.lat,
+                            lon: item.lon
+                        })
+                    });
+                    if (ingestResp.ok) {
+                        const ingData = await ingestResp.json();
+                        if (typeof ingData.trust_score === 'number') score = ingData.trust_score;
+                    }
+                    
+                    // Update display history to show it is now synced
+                    let history = JSON.parse(localStorage.getItem('atmos_display_history') || '[]');
+                    let reportToUpdate = history.find(r => r.id === item.id);
+                    if(reportToUpdate) {
+                        reportToUpdate.syncStatus = 'online';
+                        reportToUpdate.trustScore = score;
+                    }
+                    localStorage.setItem('atmos_display_history', JSON.stringify(history));
+                    renderReports();
+
+                } catch (e) {
+                    remaining.push(item);
+                }
+            }
+            
+            localStorage.setItem('atmos_offline_queue', JSON.stringify(remaining));
+            if (remaining.length === 0) setTimeout(() => showNotification("✅ Offline reports synced & AI verified!", "success"), 2000);
+        }
+
+        window.addEventListener('online', syncOfflineQueue);
+
+        // --- Submit Handler ---
+        document.getElementById('citizenForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const payload = {
+                id: `citizen_${Date.now()}`,
+                category: document.getElementById('category').value,
+                text: document.getElementById('text').value,
+                lat: userLat,
+                lon: userLon
+            };
+
+            if (!navigator.onLine) {
+                // Save to queue for background sync
+                const queue = JSON.parse(localStorage.getItem('atmos_offline_queue') || '[]');
+                queue.push(payload);
+                localStorage.setItem('atmos_offline_queue', JSON.stringify(queue));
+                
+                // Save to display history as offline
+                saveAndRenderReport(payload, 'offline');
+                showNotification("⚠️ NETWORK OFFLINE: Report queued locally.", "error");
+                document.getElementById('citizenForm').reset();
+                return;
+            }
+
+            try {
+                let score = 50;
+                let status = "Suspicious";
+
+                // 1. Check Python AI engine if available
+                try {
+                    const resp = await fetch('http://localhost:8000/verify', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        score = data.trust_score;
+                        status = data.verification_status;
+                    }
+                } catch (err) {}
+
+                // 2. Ingest into Node server & cross-check live Weather API
+                const ingestResp = await fetch('/ingest', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        event_type: payload.category,
+                        text: payload.text,
+                        lat: payload.lat,
+                        lon: payload.lon
+                    })
+                });
+
+                if (ingestResp.ok) {
+                    const ingData = await ingestResp.json();
+                    if (typeof ingData.trust_score === 'number') {
+                        score = ingData.trust_score;
+                        status = ingData.status;
+                    }
+                }
+                
+                saveAndRenderReport(payload, 'online', score);
+                const emoji = score >= 80 ? "✅" : score >= 40 ? "⚠️" : "🛑";
+                showNotification(`${emoji} AI Analyzed! Real Trust Score: ${score}% [${status}]`, score >= 80 ? "success" : "error");
+                document.getElementById('citizenForm').reset();
+                
+            } catch (err) {
+                const queue = JSON.parse(localStorage.getItem('atmos_offline_queue') || '[]');
+                queue.push(payload);
+                localStorage.setItem('atmos_offline_queue', JSON.stringify(queue));
+                saveAndRenderReport(payload, 'offline');
+                showNotification("⚠️ SERVER DOWN: Report queued locally.", "error");
+            }
+        });
+    </script>
 </body>
 </html>
