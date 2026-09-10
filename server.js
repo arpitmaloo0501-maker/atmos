@@ -101,28 +101,36 @@ const server = http.createServer((req, res) => {
             const code = curr.weather_code || 0;
 
             const evLower = event.toLowerCase();
-            if (evLower.includes('flood') || evLower.includes('rain') || evLower.includes('thunderstorm') || evLower.includes('waterlog')) {
-              if (p >= 0.5 || code >= 50) {
+            if (evLower.includes('flood') || evLower.includes('waterlog')) {
+              if (p >= 15.0) {
                 calculatedTrust = 94;
                 calculatedStatus = "Verified";
-              } else if (p === 0 && code < 50) {
+              } else {
                 calculatedTrust = 15;
+                calculatedStatus = "Rejected";
+              }
+            } else if (evLower.includes('rain') || evLower.includes('thunderstorm')) {
+              if (p >= 2.0) {
+                calculatedTrust = 90;
+                calculatedStatus = "Verified";
+              } else {
+                calculatedTrust = 30;
                 calculatedStatus = "Rejected";
               }
             } else if (evLower.includes('heatwave') || evLower.includes('heat')) {
-              if (t >= 35) {
+              if (t >= 35.0) {
                 calculatedTrust = 90;
                 calculatedStatus = "Verified";
-              } else if (t < 32) {
+              } else {
                 calculatedTrust = 15;
                 calculatedStatus = "Rejected";
               }
-            } else if (evLower.includes('cyclone') || evLower.includes('wind') || evLower.includes('storm')) {
-              if (w >= 25 || code >= 95) {
+            } else if (evLower.includes('cyclone') || evLower.includes('storm')) {
+              if (w >= 50.0) {
                 calculatedTrust = 90;
                 calculatedStatus = "Verified";
-              } else if (w < 15) {
-                calculatedTrust = 20;
+              } else {
+                calculatedTrust = 15;
                 calculatedStatus = "Rejected";
               }
             } else {
